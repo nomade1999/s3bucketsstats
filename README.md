@@ -34,19 +34,14 @@ You will need to have python3 installed with the boto3 sdk. Most of the other im
 Here's the list of import;
 
 ```
-import json
-import math
-import re
-import sys
-import time
-from argparse import ArgumentParser
-from datetime import datetime
-
 import boto3
 import requests
-from botocore.config import Config
+```
 
-import itertools
+On a clean linux server I had to first install python3 then boto3 and requests.
+```
+yum install python3
+pip3 install boto3 requests
 ```
 
 You will also need to get you environment setup to access AWS CLI. 
