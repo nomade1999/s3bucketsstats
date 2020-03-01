@@ -95,7 +95,6 @@ def get_versioning(bucket_name):
 def get_grantees(bucket_name):
     acl = boto3.resource('s3').Bucket(bucket_name).Acl()
     grantees = []
-    print(acl.grants)
     groups = itertools.groupby(sorted(acl.grants, key=lambda k: k['Permission']), lambda k: k['Permission'])
     for k, g in groups:
         perm = {}
