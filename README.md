@@ -50,9 +50,21 @@ import itertools
 ```
 
 You will also need to get you environment setup to access AWS CLI. 
-
+You have to make sure that you have a minimum of READ ACCESS to all S3 buckets.
 ```
-Give examples
+{
+    "Version": "2012-10-17",
+    "Statement": [
+        {
+            "Effect": "Allow",
+            "Action": [
+                "s3:Get*",
+                "s3:List*"
+            ],
+            "Resource": "*"
+        }
+    ]
+}
 ```
 
 ### Installing
