@@ -170,38 +170,52 @@ def read_manifest(bucket_name, key):
     return contents
 
 
-def get_inventory_filenames(bucket_name, inventory_bucket, inventory_id):
-    kwargs = {'Bucket': inventory_bucket, 'Prefix': bucket_name + "/" + inventory_id}
+def get_inventory_manifest(bucket_name, inventory_bucket, inventory_id):
+    kwargs = {'Bucket': inventory_bucket, 'Prefix': bucket_name + "/" + inventory_id + "/"}
     objs = s3.list_objects_v2(**kwargs)['Contents']
     get_last_modified = lambda obj: obj['LastModified']
-    latest = sorted(objs, key=get_last_modified)[-3:]
-    inventory_details = [{obj['Key'].split('/')[-1]: obj['Key']} for obj in latest]
-    return inventory_details
+    latest = sorted(objs, key=get_last_modified, reverse=True)
 
+    if settings._VERBOSE > 3:
+        print("AAA: {}".format(json.dumps(json.loads(json.dumps(latest,default=str)), default=str, indent=2)))
+    for obj in latest:
+        if obj['Key'].endswith('manifest.json'):
+            #print("found {} ".format(obj))
+            return obj['Key']
+    return ''
 
 def load_inventory(bucket_name, inventories):
+    inv = []
     for inventory in inventories:
         if settings._VERBOSE > 2:
             print("load_inventory {}".format(inventory))
         if inventory["Format"] == "CSV" and inventory["IsEnabled"]:
+            if settings._VERBOSE > 2:
+                print("load_inventory {}".format(inventory["Id"]))
             try:
                 inventory_bucket = inventory["Bucket"]
                 inventory_id = inventory["Id"]
-                inventory_details = get_inventory_filenames(bucket_name, inventory_bucket, inventory_id)
-                for item in inventory_details:
-                    if item.get("manifest.json") != None:
-                        manifest_json = item.get("manifest.json")
-                manifest = read_manifest(inventory_bucket, manifest_json)
+                inventory_manifest = get_inventory_manifest(bucket_name, inventory_bucket, inventory_id)
+                print("Using Inventory Id {} for bucket {}".format(inventory_id, bucket_name))
+                if inventory_manifest.__len__() == 0:
+                    continue
+                if settings._VERBOSE > 2:
+                    print("inventory_manifest: {}".format(inventory_manifest))
+                manifest = read_manifest(inventory_bucket, inventory_manifest)
+                if settings._VERBOSE > 2:
+                    print("manifest: {}".format(manifest))
                 schema = [item.strip() for item in manifest["fileSchema"].split(',')]
                 if settings._VERBOSE > 2:
                     print("schema: {}".format(schema))
                     print("files: {}".format(manifest["files"][0]["key"]))
+                inv = read_inventory(inventory_bucket, manifest, schema)
             except Exception as e:
-                print("load_inventory exception:",e)
+                print("load_inventory exception:", e)
                 continue
-            break
-
-    return read_inventory(inventory_bucket, manifest, schema)
+            #print("inventory for {} len={} for {}".format(inv,inv.__len__(), inventory))
+            if inv.__len__() > 0:
+                break
+    return inv
 
 
 def get_inventory(bucket_name):
@@ -287,8 +301,8 @@ def read_inventory(bucket_name, manifest, cols_names):
         for index, row in df.iterrows():
             d = row.to_dict()
             if settings._VERBOSE > 3:
-                print(d)
-            data.append(d)
+                print({'LastModifiedDate': d["LastModifiedDate"], 'Size': d["Size"], 'StorageClass': d["StorageClass"]})
+            data.append({'LastModifiedDate': d["LastModifiedDate"], 'Size': d["Size"], 'StorageClass': d["StorageClass"]})
         if settings._VERBOSE > 2:
             print("read_inventory {} completed {}".format(key, data.__len__()))
     return data
@@ -313,7 +327,7 @@ def analyse_bucket_contents(bucket, prefix='/', delimiter='/', start_after=''):
     if settings._CACHE and os.path.isfile(bucket_name + ".cache"):
         all_objects = panda_read_csv(bucket_name)
     elif settings._INVENTORY and inventory != 'Disabled' and inventory.__len__() > 0:
-        print("Try via Inventory for bucket {}".format(bucket_name))
+        print("Try via Inventory for bucket {}".format(bucket_name), end="\r")
         all_objects = load_inventory(bucket_name, inventory)
     if all_objects.__len__() == 0:
         prefix = prefix[1:] if prefix.startswith(delimiter) else prefix
