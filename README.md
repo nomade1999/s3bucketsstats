@@ -23,7 +23,9 @@ While most metrics are directly available from single API calls some others are 
 For example it is possible to get the total size of a buckets per storage type via cloudwatch but not the count of objects per storage type.
 For those statistics it will require to get an inventory of the bucket and make the calculations.
 
-Now it is possible to gather some more analytics and also inventory from AWS but this require to be configured and take about 24 hours to get the first results. That is not a viable solution when statistics are requested on the spot.
+Now it is possible to gather some more analytics and also inventory from AWS but this require to be configured and take about 24 hours to get the first results. 
+
+If an inventory was already setup and enabled it will try to make use of it to reduce processing time. Just make sure that getObjects access is permitted for the user running this script.
 
 ### Prerequisites
 
@@ -36,12 +38,13 @@ Here's the list of import;
 ```
 import boto3
 import requests
+import pandas
 ```
 
 On a clean linux server I had to first install python3 then boto3 and requests.
 ```
 yum install python3
-pip3 install boto3 requests
+pip3 install boto3 requests pandas
 ```
 
 You will also need to get you environment setup to access AWS CLI. 
