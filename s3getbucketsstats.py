@@ -1,12 +1,20 @@
+#!/usr/local/bin/python3
+
+import csv
+import gzip
 import json
 import math
+import os
 import re
 import sys
 import time
 from argparse import ArgumentParser
-from datetime import datetime
+from datetime import datetime, timedelta
+from io import BytesIO, TextIOBase, StringIO
 
 import boto3
+import dateutil.parser
+import pandas as pd
 import requests
 from botocore.config import Config
 
@@ -19,16 +27,36 @@ except Exception as e:
 
 groups_dict = {'REDUCED_REDUNDANCY', 'STANDARD', 'STANDARD_IA'}
 size_name = ("B", "KB", "MB", "GB", "TB", "PB", "EB", "ZB", "YB")
+csv_columns = ['Bucket', 'Key', 'ETag', 'Size', 'LastModified', 'StorageClass']
 
 
 class Settings(object):
-
     def __init__(self):
         self._REGEX = ".*"
         self._BUCKET_LIST_REGEX = '.*'
         self._KEY_PREFIX = '/'
         self._DISPLAY_SIZE = 3
         self._REGION_FILTER = '.*'
+        self._OUTPUT_FILE = ''
+        self._CACHE = False
+        self._VERBOSE = 1
+        self._REFRESHCACHE = False
+        self._INVENTORY = False
+
+    def set_inventory(self, value):
+        self._INVENTORY = value
+
+    def set_refresh_cache(self, value):
+        self._REFRESHCACHE = value
+
+    def set_verbose(self, value):
+        self._VERBOSE = value
+
+    def set_cache(self, value):
+        self._CACHE = value
+
+    def set_output_file(self, output_file):
+        self._OUTPUT_FILE = output_file
 
     def set_region_filter(self, regex):
         self._REGION_FILTER = regex
@@ -44,6 +72,11 @@ class Settings(object):
 
     def set_key_prefix(self, regex):
         self._KEY_PREFIX = regex
+
+
+def append_output(results):
+    with open(settings._OUTPUT_FILE, "a") as output:
+        output.write(results)
 
 
 def get_region(bucket_name):
@@ -103,7 +136,6 @@ def get_grantees(bucket_name):
             try:
                 gt.extend([x["Grantee"]['DisplayName']])
             except Exception as e:
-                # print("XX: {}".format(x["Grantee"]))
                 try:
                     gt.extend([x["Grantee"]['URI']])
                 except Exception as e:
@@ -131,11 +163,70 @@ def get_analytics(bucket_name):
     return analytics
 
 
+def read_manifest(bucket_name, key):
+    kwargs = {'Bucket': bucket_name, 'Key': key}
+    data = s3.get_object(**kwargs)
+    contents = json.loads(data['Body'].read())
+    return contents
+
+
+def get_inventory_filenames(bucket_name, inventory_bucket, inventory_id):
+    kwargs = {'Bucket': inventory_bucket, 'Prefix': bucket_name + "/" + inventory_id}
+    objs = s3.list_objects_v2(**kwargs)['Contents']
+    get_last_modified = lambda obj: obj['LastModified']
+    latest = sorted(objs, key=get_last_modified)[-3:]
+    inventory_details = [{obj['Key'].split('/')[-1]: obj['Key']} for obj in latest]
+    return inventory_details
+
+
+def load_inventory(bucket_name, inventories):
+    for inventory in inventories:
+        if settings._VERBOSE > 2:
+            print("load_inventory {}".format(inventory))
+        if inventory["Format"] == "CSV" and inventory["IsEnabled"]:
+            try:
+                inventory_bucket = inventory["Bucket"]
+                inventory_id = inventory["Id"]
+                inventory_details = get_inventory_filenames(bucket_name, inventory_bucket, inventory_id)
+                for item in inventory_details:
+                    if item.get("manifest.json") != None:
+                        manifest_json = item.get("manifest.json")
+                manifest = read_manifest(inventory_bucket, manifest_json)
+                schema = [item.strip() for item in manifest["fileSchema"].split(',')]
+                if settings._VERBOSE > 2:
+                    print("schema: {}".format(schema))
+                    print("files: {}".format(manifest["files"][0]["key"]))
+            except Exception as e:
+                print("load_inventory exception:",e)
+                continue
+            break
+
+    return read_inventory(inventory_bucket, manifest, schema)
+
+
 def get_inventory(bucket_name):
     try:
+        inventory = []
         bucket_inventory = s3.list_bucket_inventory_configurations(Bucket=bucket_name)["InventoryConfigurationList"]
-        inventory = 'Enabled'
+        if settings._VERBOSE > 3:
+            print("INVENTORY: {}".format(bucket_inventory))
+        for inventory_bucket in bucket_inventory:
+            if settings._VERBOSE > 3:
+                print("inventory_bucket: {}".format(inventory_bucket))
+            is_enabled = inventory_bucket["IsEnabled"]
+            inventory_id = inventory_bucket["Id"]
+            inventory_allversions = inventory_bucket["IncludedObjectVersions"]
+            if settings._VERBOSE > 3:
+                print("Header= {}".format(inventory_bucket["OptionalFields"]))
+            inventory_format = inventory_bucket["Destination"]["S3BucketDestination"]["Format"]
+            inventory_bucket = inventory_bucket["Destination"]["S3BucketDestination"]["Bucket"].split(':')[-1]
+            if settings._VERBOSE > 3:
+                print("Bucket= {} format {}".format(inventory_bucket, inventory_format))
+            inventory.append({'IsEnabled': is_enabled, 'Bucket': inventory_bucket, 'Id': inventory_id, 'Format': inventory_format})
+    except KeyError as e:
+        return inventory
     except Exception as e:
+        print("ERROR", e)
         inventory = 'Disabled'
     return inventory
 
@@ -167,17 +258,75 @@ def display_size(size_bytes, sizeformat=-1):
     return "{0}{1}".format(s, size_name[i])
 
 
-def contents(bucket, prefix='/', delimiter='/', start_after=''):
-    bucket_name = bucket["Name"]
-    start = time.perf_counter()
+def write_csv(bucket_name, objects):
+    with open(bucket_name + ".cache", 'w') as csvfile:
+        writer = csv.DictWriter(csvfile, fieldnames=csv_columns)
+        writer.writeheader()
+        for data in objects:
+            writer.writerow(data)
+
+
+def panda_read_csv(bucket_name):
+    data = []
+    df = pd.read_csv(bucket_name + ".cache")
+    for index, row in df.iterrows():
+        d = row.to_dict()
+        data.append(d)
+    return data
+
+
+def read_inventory(bucket_name, manifest, cols_names):
+    data = []
+    for files in manifest["files"]:
+        key = files["key"]
+        if settings._VERBOSE > 2:
+            print("read_inventory: {} {} {}".format(bucket_name,key,cols_names))
+        read_file = s3.get_object(Bucket=bucket_name, Key=key)
+        gzipfile = gzip.GzipFile(fileobj=BytesIO(read_file['Body'].read()))
+        df = pd.read_csv(gzipfile, sep=',', header=None, names=cols_names)
+        for index, row in df.iterrows():
+            d = row.to_dict()
+            if settings._VERBOSE > 3:
+                print(d)
+            data.append(d)
+        if settings._VERBOSE > 2:
+            print("read_inventory {} completed {}".format(key, data.__len__()))
+    return data
+
+
+def add_bool_arg(parser, name, default=False, description=""):
+    group = parser.add_mutually_exclusive_group(required=False)
+    group.add_argument('-' + name, dest=name, action='store_true',
+                       help=description + (" (DEFAULT) " if default else ''))
+    group.add_argument('-no-' + name, dest=name, action='store_false',
+                       help='Do not ' + description + (" (DEFAULT) " if not default else ''))
+    parser.set_defaults(**{name: default})
+
+
+def analyse_bucket_contents(bucket, prefix='/', delimiter='/', start_after=''):
     all_objects = []
-    prefix = prefix[1:] if prefix.startswith(delimiter) else prefix
-    start_after = (start_after or prefix) if prefix.endswith(delimiter) else start_after
-    s3_paginator = s3.get_paginator('list_objects_v2')
-    for page in s3_paginator.paginate(Bucket=bucket_name, Prefix=prefix, StartAfter=start_after,
-                                      PaginationConfig={'PageSize': 1000}):
-        all_objects.extend(page.get('Contents', ()))
-        print("{}: Objects so far: {}".format(bucket_name, all_objects.__len__()), end="\r")
+    bucket_name = bucket["Name"]
+    inventory = get_inventory(bucket_name)
+    if settings._REFRESHCACHE and os.path.isfile(bucket_name + ".cache"):
+        os.remove(bucket_name + ".cache")
+        print("removed")
+    if settings._CACHE and os.path.isfile(bucket_name + ".cache"):
+        all_objects = panda_read_csv(bucket_name)
+    elif settings._INVENTORY and inventory != 'Disabled' and inventory.__len__() > 0:
+        print("Try via Inventory for bucket {}".format(bucket_name))
+        all_objects = load_inventory(bucket_name, inventory)
+    if all_objects.__len__() == 0:
+        prefix = prefix[1:] if prefix.startswith(delimiter) else prefix
+        start_after = (start_after or prefix) if prefix.endswith(delimiter) else start_after
+        s3_paginator = s3.get_paginator('list_objects_v2')
+        if settings._CACHE:
+            write_csv(bucket_name, [])
+        for page in s3_paginator.paginate(Bucket=bucket_name, Prefix=prefix, StartAfter=start_after,
+                                          PaginationConfig={'PageSize': 1000}):
+            if settings._CACHE:
+                write_csv(bucket_name, page.get('Contents', ()))
+            all_objects.extend(page.get('Contents', ()))
+            print("{}: Objects so far: {}".format(bucket_name, all_objects.__len__()), end="\r")
     groups = itertools.groupby(sorted(all_objects, key=lambda k: k['StorageClass']), lambda k: k['StorageClass'])
     bucket_content = []
     bucket_size = 0
@@ -189,7 +338,10 @@ def contents(bucket, prefix='/', delimiter='/', start_after=''):
             bucket_size += x['Size']
             size += x['Size']
             cnt += 1
-            lastmodified = datetime.fromisoformat(str(x["LastModified"]))
+            if "LastModified" in x:
+                lastmodified = datetime.fromisoformat(str(x["LastModified"]))
+            else:
+                lastmodified = dateutil.parser.parse(x["LastModifiedDate"])
             if latest == {} or lastmodified > latest:
                 latest = lastmodified
 
@@ -226,35 +378,50 @@ def contents(bucket, prefix='/', delimiter='/', start_after=''):
         }
     ]
     yield bucket_stats
-    print('time:', time.perf_counter() - start)
 
 
 if __name__ == "__main__":
     parser = ArgumentParser()
-    parser.add_argument("-l", dest="bucket_list", required=False, default='.*', help="Regex to filter which buckets to process.")
-    parser.add_argument("-k", dest="key_prefix", required=False, default='/', help="Key prefix to filter on, default='/'")
+    parser.add_argument("-v", dest="verbose", required=False, default=1, help="Verbose level, 0 for quiet.")
+    parser.add_argument("-l", dest="bucket_list", required=False, default='.*',
+                        help="Regex to filter which buckets to process.")
+    parser.add_argument("-k", dest="key_prefix", required=False, default='/',
+                        help="Key prefix to filter on, default='/'")
     parser.add_argument("-r", dest="region_filter", required=False, default='.*', help="Regex Region filter")
-    #parser.add_argument("-g", dest="groupby_region", required=False, default='', help="Group by Region")
+    parser.add_argument("-o", dest="output", required=False, default='', help="Output to File")
     parser.add_argument("-s", dest="display_size", type=int, required=False, default=3,
                         help="Display size in 0:B, 1:KB, 2:MB, 3:GB, 4:TB, 5:PB, 6:EB, 7:ZB, 8:YB")
 
-    #if len(sys.argv) == 1:
-    #    print_help()
-    #    sys.exit()
+    add_bool_arg(parser, "cache", False, "Use Cache file if available")
+    add_bool_arg(parser, "refresh", False, "Force Refresh Cache")
+    add_bool_arg(parser, "inventory", True, "Use Inventory if exist")
 
     settings = Settings()
     arguments = parser.parse_args()
+
+    if arguments.verbose:
+        settings.set_verbose(int(arguments.verbose))
     if arguments.display_size:
         settings.set_display_size(int(arguments.display_size))
     if arguments.bucket_list:
         settings.set_bucket_list_regex(arguments.bucket_list)
     if arguments.region_filter:
         settings.set_region_filter(arguments.region_filter)
+    if arguments.refresh:
+        settings.set_refresh_cache(arguments.refresh)
+    if arguments.cache:
+        settings.set_cache(arguments.cache)
     if arguments.key_prefix:
         settings.set_key_prefix(arguments.key_prefix)
+    if arguments.output is not "output.txt":
+        settings.set_output_file(arguments.output)
+    if arguments.inventory:
+        settings.set_inventory(arguments.inventory)
 
     buckets = s3.list_buckets()
+    all_buckets = []
 
+    realstart = time.perf_counter()
     for bucket in buckets["Buckets"]:
         bucket_name = bucket['Name']
         if not re.match(settings._BUCKET_LIST_REGEX, bucket_name):
@@ -263,9 +430,20 @@ if __name__ == "__main__":
             continue
 
         print("Name: {} Created: {}".format(bucket_name, bucket["CreationDate"]))
-        all_buckets = []
-        for object in contents(bucket, settings._KEY_PREFIX):
+        start = time.perf_counter()
+        for object in analyse_bucket_contents(bucket, settings._KEY_PREFIX):
             all_buckets.extend(object)
             json_object = json.loads(json.dumps(object))
             json_formatted_str = json.dumps(json_object, indent=2)
-            print(json_formatted_str)
+            if settings._VERBOSE > 1:
+                print(json_formatted_str)
+            print('bucket {} process time: {}'.format(bucket_name, time.perf_counter() - start))
+            start = time.perf_counter()
+
+    all_buckets_stats = {"Buckets": all_buckets}
+    all_buckets_stats_formatted = json.dumps(json.loads(json.dumps(all_buckets_stats)), indent=2)
+    if settings._OUTPUT_FILE.__len__() > 0:
+        append_output(all_buckets_stats_formatted)
+    if settings._VERBOSE > 0:
+        print("AllBuckets: {} ".format(all_buckets_stats_formatted))
+    print('Total process time:', time.perf_counter() - realstart)
