@@ -67,11 +67,44 @@ You have to make sure that you have a minimum of READ ACCESS to all S3 buckets.
 
 ### Installing
 
-Just setup your environement to connect to AWS and test it to make sure you have access to your S3 buckets.
-If running on an EC2 instance I would suggest to use IAM Role.
+git clone $REPO_URL && cd s3bucketsstats
+virtualenv venv
+source venv/bin/activate
+pip install -r requirements.txt
+
+python3 s3bucketstats.py -h
 
 ## Running examples
 
+Just setup your environement to connect to AWS and test it to make sure you have access to your S3 buckets.
+If running on an EC2 instance I would suggest to use IAM Role attached to your EC2 instance.
+```
+usage: s3getbucketsstats.py [-h] [-v VERBOSE] [-l BUCKET_LIST] [-k KEY_PREFIX]
+                            [-r REGION_FILTER] [-o OUTPUT] [-s DISPLAY_SIZE]
+                            [-cache | -no-cache] [-refresh | -no-refresh]
+                            [-inventory | -no-inventory]
+                            [-s3select | -no-s3select]
+
+optional arguments:
+  -h, --help        show this help message and exit
+  -v VERBOSE        Verbose level, 0 for quiet.
+  -l BUCKET_LIST    Regex to filter which buckets to process.
+  -k KEY_PREFIX     Key prefix to filter on, default='/'
+  -r REGION_FILTER  Regex Region filter
+  -o OUTPUT         Output to File
+  -s DISPLAY_SIZE   Display size in 0:B, 1:KB, 2:MB, 3:GB, 4:TB, 5:PB, 6:EB,
+                    7:ZB, 8:YB
+  -cache            Use Cache file if available
+  -no-cache         Do not Use Cache file if available (DEFAULT)
+  -refresh          Force Refresh Cache
+  -no-refresh       Do not Force Refresh Cache (DEFAULT)
+  -inventory        Use Inventory if exist (DEFAULT)
+  -no-inventory     Do not Use Inventory if exist
+  -s3select         Use S3 Select to parse inventory result files
+                    (EXPERIMENTAL)
+  -no-s3select      Do not Use S3 Select to parse inventory result files
+                    (EXPERIMENTAL) (DEFAULT)
+```
 You can then try the commandline as follow;
 
 Get statistics for all buckets which name start with "a" and reports sizes in GB
