@@ -67,12 +67,14 @@ You have to make sure that you have a minimum of READ ACCESS to all S3 buckets.
 
 ### Installing
 
+```
 git clone $REPO_URL && cd s3bucketsstats
 virtualenv venv
 source venv/bin/activate
 pip install -r requirements.txt
 
 python3 s3bucketstats.py -h
+```
 
 ## Running examples
 
