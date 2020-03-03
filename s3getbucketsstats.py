@@ -1,4 +1,9 @@
 #!/usr/local/bin/python3
+'''
+S3GetBucketStats
+version 1.0.0
+By Andre Couture
+'''
 
 import csv
 import gzip
@@ -10,7 +15,7 @@ import sys
 import time
 from argparse import ArgumentParser
 from datetime import datetime, timedelta
-from io import BytesIO, TextIOBase, StringIO
+from io import BytesIO, StringIO
 
 import boto3
 import dateutil.parser
@@ -35,13 +40,17 @@ class Settings(object):
         self._REGEX = ".*"
         self._BUCKET_LIST_REGEX = '.*'
         self._KEY_PREFIX = '/'
-        self._DISPLAY_SIZE = 3
+        self._DISPLAY_SIZE = 0
         self._REGION_FILTER = '.*'
         self._OUTPUT_FILE = ''
-        self._CACHE = False
         self._VERBOSE = 1
-        self._REFRESHCACHE = False
-        self._INVENTORY = False
+        self._CACHE = None
+        self._REFRESHCACHE = None
+        self._INVENTORY = None
+        self._S3SELECT = None
+
+    def set_s3select(self, value):
+        self._S3SELECT = value
 
     def set_inventory(self, value):
         self._INVENTORY = value
@@ -177,12 +186,12 @@ def get_inventory_manifest(bucket_name, inventory_bucket, inventory_id):
     latest = sorted(objs, key=get_last_modified, reverse=True)
 
     if settings._VERBOSE > 3:
-        print("AAA: {}".format(json.dumps(json.loads(json.dumps(latest,default=str)), default=str, indent=2)))
+        print("AAA: {}".format(json.dumps(json.loads(json.dumps(latest, default=str)), default=str, indent=2)))
     for obj in latest:
         if obj['Key'].endswith('manifest.json'):
-            #print("found {} ".format(obj))
             return obj['Key']
     return ''
+
 
 def load_inventory(bucket_name, inventories):
     inv = []
@@ -212,7 +221,7 @@ def load_inventory(bucket_name, inventories):
             except Exception as e:
                 print("load_inventory exception:", e)
                 continue
-            #print("inventory for {} len={} for {}".format(inv,inv.__len__(), inventory))
+            # print("inventory for {} len={} for {}".format(inv,inv.__len__(), inventory))
             if inv.__len__() > 0:
                 break
     return inv
@@ -236,7 +245,8 @@ def get_inventory(bucket_name):
             inventory_bucket = inventory_bucket["Destination"]["S3BucketDestination"]["Bucket"].split(':')[-1]
             if settings._VERBOSE > 3:
                 print("Bucket= {} format {}".format(inventory_bucket, inventory_format))
-            inventory.append({'IsEnabled': is_enabled, 'Bucket': inventory_bucket, 'Id': inventory_id, 'Format': inventory_format})
+            inventory.append(
+                {'IsEnabled': is_enabled, 'Bucket': inventory_bucket, 'Id': inventory_id, 'Format': inventory_format})
     except KeyError as e:
         return inventory
     except Exception as e:
@@ -247,7 +257,6 @@ def get_inventory(bucket_name):
 
 def get_replication(bucket_name):
     try:
-        # print("REPLICATION: {}".format(s3.get_bucket_replication(Bucket=bucket_name)))
         replication = "Enabled"
     except Exception as e:
         replication = "Disabled"
@@ -289,22 +298,95 @@ def panda_read_csv(bucket_name):
     return data
 
 
+def s3select_inventory(bucket_name, key, cols_names):
+    content_options = {"FieldDelimiter": ",", 'AllowQuotedRecordDelimiter': False}
+    # expression = "select * from s3object"
+    expression = "select _6,_7,_8,_9 from s3object"
+    req = s3.select_object_content(
+        Bucket=bucket_name,
+        Key=key,
+        ExpressionType='SQL',
+        Expression=expression,
+        InputSerialization={'CompressionType': "GZIP", "CSV": content_options},
+        OutputSerialization={'CSV': {}},
+    )
+    records = []
+    for event in req['Payload']:
+        if 'Records' in event:
+            records.append(event['Records']['Payload'].decode('utf-8'))
+        elif 'Stats' in event:
+            stats = event['Stats']['Details']
+    file_str = ''.join(r for r in records)
+    select_df = pd.read_csv(StringIO(file_str), names=['Size', 'LastModifiedDate', 'EncryptionStatus', 'StorageClass'])
+    aggr_size = select_df.groupby('StorageClass').agg({'Size': [('TotalSize', 'sum'), ('ObjectsCount', 'count')]})
+    print("XXX")
+    print(aggr_size)
+    print("XXX")
+    print(aggr_size['Size']['TotalSize'])
+
+    aggr_latest = select_df.agg({'LastModifiedDate': ['max']})
+    return select_df, aggr_size, aggr_latest
+
+
 def read_inventory(bucket_name, manifest, cols_names):
     data = []
+    summary = None
+    data_array1 = []
+    data_array2 = []
     for files in manifest["files"]:
         key = files["key"]
+        print(key)
+        if settings._S3SELECT:
+            data2, data_size, data_latest = s3select_inventory(bucket_name, key, cols_names)
+            data_array1.append(data_size)
+            data_array2.append(data_latest)
+        else:
+            data1 = read_inventory_file(bucket_name, key, cols_names)
+            data.extend(data1)
+        # print("data2: {}\n       {}".format((data2,data1)))
+    if settings._S3SELECT:
+        latest = pd.concat(data_array2)
+        summary = pd.concat(data_array1)
         if settings._VERBOSE > 2:
-            print("read_inventory: {} {} {}".format(bucket_name,key,cols_names))
-        read_file = s3.get_object(Bucket=bucket_name, Key=key)
-        gzipfile = gzip.GzipFile(fileobj=BytesIO(read_file['Body'].read()))
-        df = pd.read_csv(gzipfile, sep=',', header=None, names=cols_names)
-        for index, row in df.iterrows():
-            d = row.to_dict()
-            if settings._VERBOSE > 3:
-                print({'LastModifiedDate': d["LastModifiedDate"], 'Size': d["Size"], 'StorageClass': d["StorageClass"]})
-            data.append({'LastModifiedDate': d["LastModifiedDate"], 'Size': d["Size"], 'StorageClass': d["StorageClass"]})
+            print("++++++++++++")
+            print(summary)
+            print("++++++++++++")
+        summary.groupby('StorageClass', level=1).agg({'TotalSize': [('TotalSize', 'sum'), ('ObjectsCount', 'sum')]})
+        # aggr_latest = latest.agg({'LastModifiedDate': ['max']})
+        data = summary.to_dict(orient='list')
+        # print(aggr_latest)
+        # print(aggr_size)
+        # summary = pd.merge(data_array1, on=['StorageClass','Size'])
         if settings._VERBOSE > 2:
-            print("read_inventory {} completed {}".format(key, data.__len__()))
+            print("SUMARY\n{}".format(summary))
+    if settings._VERBOSE > 2:
+        print("DATA\n{}".format(data))
+
+    return data
+
+
+def read_inventory_file(bucket_name, key, cols_names):
+    print("read_inventory_file: {} {} {}".format(bucket_name, key, cols_names))
+    s3_client = boto3.client("s3", config=Config(s3={"use_accelerate_endpoint": True}))
+    try:
+        status = s3_client.get_bucket_accelerate_configuration(Bucket=bucket_name)["Status"]
+        print("Loading inventory using acceleration {}".format(status))
+    except Exception as e:
+        # Acceleration not possible
+        s3_client = s3
+    data = []
+    if settings._VERBOSE > 2:
+        print("read_inventory: {} {} {}".format(bucket_name, key, cols_names))
+    read_file = s3_client.get_object(Bucket=bucket_name, Key=key)
+    gzipfile = gzip.GzipFile(fileobj=BytesIO(read_file['Body'].read()))
+    df = pd.read_csv(gzipfile, sep=',', header=None, names=cols_names)
+    for index, row in df.iterrows():
+        d = row.to_dict()
+        if settings._VERBOSE > 3:
+            print({'LastModifiedDate': d["LastModifiedDate"], 'Size': d["Size"], 'StorageClass': d["StorageClass"]})
+        data.append({'LastModifiedDate': d["LastModifiedDate"], 'Size': d["Size"], 'StorageClass': d["StorageClass"]})
+    if settings._VERBOSE > 2:
+        print("read_inventory {} completed {}".format(key, data.__len__()))
     return data
 
 
@@ -403,12 +485,13 @@ if __name__ == "__main__":
                         help="Key prefix to filter on, default='/'")
     parser.add_argument("-r", dest="region_filter", required=False, default='.*', help="Regex Region filter")
     parser.add_argument("-o", dest="output", required=False, default='', help="Output to File")
-    parser.add_argument("-s", dest="display_size", type=int, required=False, default=3,
+    parser.add_argument("-s", dest="display_size", type=int, required=False, default=0,
                         help="Display size in 0:B, 1:KB, 2:MB, 3:GB, 4:TB, 5:PB, 6:EB, 7:ZB, 8:YB")
 
     add_bool_arg(parser, "cache", False, "Use Cache file if available")
     add_bool_arg(parser, "refresh", False, "Force Refresh Cache")
     add_bool_arg(parser, "inventory", True, "Use Inventory if exist")
+    add_bool_arg(parser, "s3select", False, "Use S3 Select to parse inventory result files (EXPERIMENTAL)")
 
     settings = Settings()
     arguments = parser.parse_args()
@@ -421,16 +504,14 @@ if __name__ == "__main__":
         settings.set_bucket_list_regex(arguments.bucket_list)
     if arguments.region_filter:
         settings.set_region_filter(arguments.region_filter)
-    if arguments.refresh:
-        settings.set_refresh_cache(arguments.refresh)
-    if arguments.cache:
-        settings.set_cache(arguments.cache)
     if arguments.key_prefix:
         settings.set_key_prefix(arguments.key_prefix)
     if arguments.output is not "output.txt":
         settings.set_output_file(arguments.output)
-    if arguments.inventory:
-        settings.set_inventory(arguments.inventory)
+    settings.set_refresh_cache(arguments.refresh)
+    settings.set_cache(arguments.cache)
+    settings.set_inventory(arguments.inventory)
+    settings.set_s3select(arguments.s3select)
 
     buckets = s3.list_buckets()
     all_buckets = []
