@@ -507,7 +507,7 @@ if __name__ == "__main__":
         settings.set_region_filter(arguments.region_filter)
     if arguments.key_prefix:
         settings.set_key_prefix(arguments.key_prefix)
-    if arguments.output is not "output.txt":
+    if arguments.output != "output.txt":
         settings.set_output_file(arguments.output)
     settings.set_refresh_cache(arguments.refresh)
     settings.set_cache(arguments.cache)
