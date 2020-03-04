@@ -483,8 +483,8 @@ if __name__ == "__main__":
     add_bool_arg(parser, "cache", False, "Use Cache file if available")
     add_bool_arg(parser, "refresh", False, "Force Refresh Cache")
     add_bool_arg(parser, "inventory", True, "Use Inventory if exist")
-    add_bool_arg(parser, "s3select", True, "Use S3 Select to parse inventory result files (EXPERIMENTAL)")
-    add_bool_arg(parser, "lowmemory", False, "If you have low memory.(EXPERIMENTAL)")
+    add_bool_arg(parser, "s3select", True, "Use S3 Select to parse inventory result files")
+    add_bool_arg(parser, "lowmemory", False, "If you have low memory.")
 
     settings = Settings()
     arguments = parser.parse_args()
