@@ -86,6 +86,7 @@ usage: s3getbucketsstats.py [-h] [-v VERBOSE] [-l BUCKET_LIST] [-k KEY_PREFIX]
                             [-cache | -no-cache] [-refresh | -no-refresh]
                             [-inventory | -no-inventory]
                             [-s3select | -no-s3select]
+                            [-lowmemory | -no-lowmemory]
 
 optional arguments:
   -h, --help        show this help message and exit
@@ -102,10 +103,11 @@ optional arguments:
   -no-refresh       Do not Force Refresh Cache (DEFAULT)
   -inventory        Use Inventory if exist (DEFAULT)
   -no-inventory     Do not Use Inventory if exist
-  -s3select         Use S3 Select to parse inventory result files
-                    (EXPERIMENTAL)
+  -s3select         Use S3 Select to parse inventory result files (DEFAULT)
   -no-s3select      Do not Use S3 Select to parse inventory result files
-                    (EXPERIMENTAL) (DEFAULT)
+  -lowmemory        If you have low memory.
+  -no-lowmemory     Do not If you have low memory. (DEFAULT)
+
 ```
 You can then try the commandline as follow;
 
