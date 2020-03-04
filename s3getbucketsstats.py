@@ -3,10 +3,11 @@
 S3GetBucketStats
 version 1.0.0
 By Andre Couture
+Coveo Challenge
 '''
-
 import csv
 import gzip
+import itertools
 import json
 import math
 import os
@@ -14,16 +15,13 @@ import re
 import sys
 import time
 from argparse import ArgumentParser
-from datetime import datetime, timedelta
+from datetime import timedelta
 from io import BytesIO, StringIO
 
 import boto3
-import dateutil.parser
 import pandas as pd
 import requests
 from botocore.config import Config
-
-import itertools
 
 try:
     s3 = boto3.client('s3')
@@ -48,6 +46,10 @@ class Settings(object):
         self._REFRESHCACHE = None
         self._INVENTORY = None
         self._S3SELECT = None
+        self._LOWMEMORY = False
+
+    def set_lowmemory(self, value):
+        self._LOWMEMORY = value
 
     def set_s3select(self, value):
         self._S3SELECT = value
@@ -205,9 +207,9 @@ def get_replication(bucket_name):
             for configuration in configurations['ReplicationConfiguration']['Rules']:
                 response.append(
                     {
-                       'Id': configuration['ID'],
-                       'Status': configuration['Status'],
-                       'Destination': configuration['Destination']
+                        'Id': configuration['ID'],
+                        'Status': configuration['Status'],
+                        'Destination': configuration['Destination']
                     }
                 )
     except Exception:
@@ -254,7 +256,8 @@ def load_inventory_csv(bucket_name, inventory_ids):
             try:
                 if settings._VERBOSE > 0:
                     print("Using Inventory Id '{}' for bucket '{}'".format(inventory['Id'], bucket_name))
-                inventory_manifest = find_latest_inventory_manifest_key(bucket_name, inventory['Bucket'], inventory['Id'])
+                inventory_manifest = find_latest_inventory_manifest_key(bucket_name, inventory['Bucket'],
+                                                                        inventory['Id'])
                 if inventory_manifest.__len__() == 0:
                     continue
                 manifest = load_manifest(inventory['Bucket'], inventory_manifest)
@@ -264,7 +267,22 @@ def load_inventory_csv(bucket_name, inventory_ids):
                 if settings._VERBOSE > 2:
                     print("schema: {}".format(schema))
                     print("files: {}".format(manifest['files'][0]['key']))
-                inv = read_inventory(inventory['Bucket'], manifest, schema)
+
+                if settings._S3SELECT:
+                    inv = pd.concat(
+                        s3select_inventory_csv(inventory['Bucket'], files['key'], schema).groupby('StorageClass').agg(
+                            {'Count': 'sum', 'Size': 'sum', 'LastModifiedDate': 'max'}) for files in
+                        manifest['files']).groupby('StorageClass').agg(
+                        {'Count': 'sum', 'Size': 'max', 'LastModifiedDate': 'max'}).rename(
+                        columns={'LastModifiedDate': 'LastModified'})
+                else:
+                    inv = pd.concat(
+                        read_inventory_file(inventory['Bucket'], files['key'], schema).groupby('StorageClass').agg(
+                            {'Count': 'sum', 'Size': 'sum', 'LastModifiedDate': 'max'}) for files in
+                        manifest['files']).groupby(
+                        'StorageClass').agg({'Count': 'sum', 'Size': 'max', 'LastModifiedDate': 'max'}).rename(
+                        columns={'LastModifiedDate': 'LastModified'})
+
             except Exception as e:
                 print("load_inventory exception:", e)
                 continue
@@ -290,7 +308,7 @@ def write_cache_csv(bucket_name, objects):
             writer.writerow(data)
 
 
-def panda_read_csv(bucket_name):
+def read_cache_csv(bucket_name):
     data = []
     df = pd.read_csv(bucket_name + ".cache")
     for index, row in df.iterrows():
@@ -299,7 +317,12 @@ def panda_read_csv(bucket_name):
     return data
 
 
-def s3select_inventory(bucket_name, key, cols_names):
+'''
+Analyse from compressed CSV file in the bucket via S3 Select
+'''
+
+
+def s3select_inventory_csv(bucket_name, key, cols_names):
     content_options = {"FieldDelimiter": ",", 'AllowQuotedRecordDelimiter': False}
     # expression = "select * from s3object"
     expression = "select _6,_7,_8,_9 from s3object"
@@ -318,41 +341,17 @@ def s3select_inventory(bucket_name, key, cols_names):
         elif "Stats" in event:
             stats = event['Stats']['Details']
     file_str = "".join(r for r in records)
-    select_df = pd.read_csv(StringIO(file_str), names=['Size', 'LastModifiedDate', 'EncryptionStatus', 'StorageClass'])
-    aggr_size = select_df.groupby('StorageClass').agg({'Size': [('TotalSize', 'sum'), ('ObjectsCount', 'count')]})
-    print("XXX")
-    print(aggr_size)
-    print("XXX")
-    print(aggr_size['Size']['TotalSize'])
 
-    aggr_latest = select_df.agg({'LastModifiedDate': ['max']})
-    return select_df, aggr_size, aggr_latest
+    df = pd.read_csv(StringIO(file_str), names=['Size', 'LastModifiedDate', 'StorageClass', 'EncryptionStatus'])
+
+    aggr = df.groupby('StorageClass').agg({'StorageClass': 'count', 'Size': 'sum', 'LastModifiedDate': 'max'}).rename(
+        columns={'StorageClass': 'Count'}).reset_index()
+    return aggr
 
 
-def read_inventory(bucket_name, manifest, cols_names):
-    data = []
-    summary = None
-    if settings._S3SELECT:
-        data_array1 = []
-        data_array2 = []
-    for files in manifest['files']:
-        key = files['key']
-        if settings._S3SELECT:
-            data2, data_size, data_latest = s3select_inventory(bucket_name, key, cols_names)
-            data_array1.append(data_size)
-            data_array2.append(data_latest)
-        else:
-            data1 = read_inventory_file(bucket_name, key, cols_names)
-            data.extend(data1)
-    if settings._S3SELECT:
-        latest = pd.concat(data_array2)
-        summary = pd.concat(data_array1)
-        summary.groupby('StorageClass', level=1).agg({'TotalSize': [('TotalSize', 'sum'), ('ObjectsCount', 'sum')]})
-        # aggr_latest = latest.agg({'LastModifiedDate': ['max']})
-        data = summary.to_dict(orient='list')
-        # summary = pd.merge(data_array1, on=['StorageClass','Size'])
-
-    return data
+'''
+Analyse from compressed CSV file in the bucket
+'''
 
 
 def read_inventory_file(bucket_name, key, cols_names):
@@ -371,13 +370,14 @@ def read_inventory_file(bucket_name, key, cols_names):
         print("read_inventory file: s3://{}/{}  Schema:{}".format(bucket_name, key, cols_names))
     read_file = s3_client.get_object(Bucket=bucket_name, Key=key)
     gzipfile = gzip.GzipFile(fileobj=BytesIO(read_file['Body'].read()))
+
     df = pd.read_csv(gzipfile, sep=',', header=None, names=cols_names)
-    for index, row in df.iterrows():
-        d = row.to_dict()
-        data.append({'LastModifiedDate': d['LastModifiedDate'], 'Size': d['Size'], 'StorageClass': d['StorageClass']})
+
+    aggr = df.groupby('StorageClass').agg({'StorageClass': 'count', 'Size': 'sum', 'LastModifiedDate': 'max'}).rename(
+        columns={'StorageClass': 'Count'}).reset_index()
     if settings._VERBOSE > 2:
         print("read_inventory read {} objects from {}.".format(data.__len__(), key))
-    return data
+    return aggr
 
 
 def add_bool_arg(parser, name, default=False, description=""):
@@ -390,65 +390,56 @@ def add_bool_arg(parser, name, default=False, description=""):
 
 
 def analyse_bucket_contents(bucket_name, prefix="/", delimiter="/", start_after=""):
-    all_objects = []
-    inventory = get_inventory_configurations(bucket_name)
-    if settings._REFRESHCACHE and os.path.isfile(bucket_name + ".cache"):
-        os.remove(bucket_name + ".cache")
-        print("removed")
+    aggs = []
     if settings._CACHE and os.path.isfile(bucket_name + ".cache"):
-        all_objects = panda_read_csv(bucket_name)
-    elif settings._INVENTORY and inventory != "Disabled" and inventory.__len__() > 0:
-        print("Try via Inventory for bucket {}".format(bucket_name), end="\r")
-        all_objects = load_inventory_csv(bucket_name, inventory)
-    if all_objects.__len__() == 0:
+        print("Processing via local Cache for bucket {}".format(bucket_name), end="\r")
+        aggs = read_cache_csv(bucket_name)
+    elif settings._INVENTORY:
+        inventory = get_inventory_configurations(bucket_name)
+        if inventory != "Disabled" and inventory.__len__() > 0:
+            print("Processing via Inventory for bucket {}".format(bucket_name), end="")
+            aggs = load_inventory_csv(bucket_name, inventory)
+
+    if aggs.__len__() == 0:
+        # at this point we could not find any data from the cache or inventory and we have to revert to listing all objects from the bucket
+        print("Processing via ListObjects for bucket {}".format(bucket_name), end="")
         prefix = prefix[1:] if prefix.startswith(delimiter) else prefix
         start_after = (start_after or prefix) if prefix.endswith(delimiter) else start_after
         s3_paginator = s3.get_paginator("list_objects_v2")
-        if settings._CACHE:
-            write_cache_csv(bucket_name, [])
+        if settings._CACHE and settings._REFRESHCACHE:
+            for p in s3_paginator.paginate(Bucket=bucket_name, Prefix=prefix, StartAfter=start_after,
+                                           PaginationConfig={'PageSize': 1000}):
+                write_cache_csv(bucket_name, p.get('Contents'))
         try:
-            for page in s3_paginator.paginate(Bucket=bucket_name, Prefix=prefix, StartAfter=start_after,
-                                              PaginationConfig={'PageSize': 1000}):
-                if settings._CACHE:
-                    write_cache_csv(bucket_name, page.get("Contents", ()))
-                all_objects.extend(page.get("Contents", ()))
-                print("{}: Objects so far: {}".format(bucket_name, all_objects.__len__()), end="\r")
-        except Exception:
-            return []
-    groups = itertools.groupby(sorted(all_objects, key=lambda k: k['StorageClass']), lambda k: k['StorageClass'])
-    bucket_content = []
-    bucket_size = 0
-    bucket_lastmodified = None
-    for k, g in groups:
-        latest = {}
-        cnt = 0
-        size = 0
-        for x in g:
-            size += x['Size']
-            cnt += 1
-            if "LastModified" in x:
-                lastmodified = datetime.fromisoformat(str(x['LastModified']))
+            if settings._LOWMEMORY:
+                # low memory
+                datas = pd.concat((pd.DataFrame(d.get("Contents"),
+                                                columns=['StorageClass', 'Size', 'LastModified']).groupby(
+                    ['StorageClass']).agg({'StorageClass': 'count', 'Size': 'sum', 'LastModified': 'max'}).rename(
+                    columns={'StorageClass': 'Count'}) for d in
+                    s3_paginator.paginate(Bucket=bucket_name, Prefix=prefix, StartAfter=start_after,
+                                          PaginationConfig={'PageSize': 1000}))).groupby(
+                    'StorageClass').agg({'Count': 'sum', 'Size': 'sum', 'LastModified': 'max'})
+                aggs = (
+                    datas.groupby(['StorageClass']).agg({'Count': 'sum', 'Size': 'sum', 'LastModified': 'max'}).rename(
+                        columns={'StorageClass': 'Count'}).reset_index())
             else:
-                lastmodified = dateutil.parser.parse(x['LastModifiedDate'])
-            if latest == {} or lastmodified > latest:
-                latest = lastmodified
-        bucket_size += size
-        if bucket_lastmodified is None:
-            bucket_lastmodified = latest
-        elif bucket_lastmodified < latest:
-            bucket_lastmodified = latest
+                # high memory
+                datas = pd.concat(
+                    pd.DataFrame(d.get("Contents"), columns=['StorageClass', 'Size', 'LastModified']) for d in
+                    s3_paginator.paginate(Bucket=bucket_name, Prefix=prefix, StartAfter=start_after,
+                                          PaginationConfig={'PageSize': 1000}))
+                aggs = (datas.groupby(['StorageClass']).agg(
+                    {'StorageClass': 'count', 'Size': 'sum', 'LastModified': 'max'}).rename(
+                    columns={'StorageClass': 'Count'}).reset_index())
 
-        bucket_objects = [
-            {
-                'Group': k,
-                'Count': cnt,
-                'Size': display_size(size),
-                'LastModifiedDate': str(latest)
-            }
-        ]
-        bucket_content.extend(bucket_objects)
+        except Exception as e:
+            print(e)
+            return []
 
-    bucket_objects = sum(item['Count'] for item in bucket_content)
+    bucket_objects = aggs['Count'].sum()
+    bucket_size = aggs['Size'].sum()
+    bucket_last = aggs['LastModified'].max()
 
     bucket = boto3.resource("s3").Bucket(bucket_name)
 
@@ -456,7 +447,7 @@ def analyse_bucket_contents(bucket_name, prefix="/", delimiter="/", start_after=
         {
             'Name': bucket_name,
             'CreationDate': str(bucket.creation_date),
-            'LastModified': str(bucket_lastmodified),
+            'LastModified': str(bucket_last),
             'Versioning': get_versioning(bucket_name),
             'WebSite': get_website(bucket_name),
             'Analytics': get_analytics(bucket_name),
@@ -471,7 +462,7 @@ def analyse_bucket_contents(bucket_name, prefix="/", delimiter="/", start_after=
             'Encryption': get_encryption(bucket_name),
             'Size': display_size(bucket_size),
             'Count': bucket_objects,
-            'Content': bucket_content
+            'Content': aggs.to_dict('rows')
         }
     ]
     yield bucket_stats
@@ -485,14 +476,15 @@ if __name__ == "__main__":
     parser.add_argument("-k", dest="key_prefix", required=False, default='/',
                         help="Key prefix to filter on, default='/'")
     parser.add_argument("-r", dest="region_filter", required=False, default='.*', help="Regex Region filter")
-    parser.add_argument("-o", dest="output", required=False, default='', help="Output to File")
+    parser.add_argument("-o", dest="output", required=False, default=None, help="Output to File")
     parser.add_argument("-s", dest="display_size", type=int, required=False, default=0,
                         help="Display size in 0:B, 1:KB, 2:MB, 3:GB, 4:TB, 5:PB, 6:EB, 7:ZB, 8:YB")
 
     add_bool_arg(parser, "cache", False, "Use Cache file if available")
     add_bool_arg(parser, "refresh", False, "Force Refresh Cache")
     add_bool_arg(parser, "inventory", True, "Use Inventory if exist")
-    add_bool_arg(parser, "s3select", False, "Use S3 Select to parse inventory result files (EXPERIMENTAL)")
+    add_bool_arg(parser, "s3select", True, "Use S3 Select to parse inventory result files (EXPERIMENTAL)")
+    add_bool_arg(parser, "lowmemory", False, "If you have low memory.(EXPERIMENTAL)")
 
     settings = Settings()
     arguments = parser.parse_args()
@@ -507,12 +499,13 @@ if __name__ == "__main__":
         settings.set_region_filter(arguments.region_filter)
     if arguments.key_prefix:
         settings.set_key_prefix(arguments.key_prefix)
-    if arguments.output != "output.txt":
+    if arguments.output is not None:
         settings.set_output_file(arguments.output)
     settings.set_refresh_cache(arguments.refresh)
     settings.set_cache(arguments.cache)
     settings.set_inventory(arguments.inventory)
     settings.set_s3select(arguments.s3select)
+    settings.set_lowmemory(arguments.lowmemory)
 
     buckets = s3.list_buckets()
     buckets_stats_array = []
@@ -522,7 +515,8 @@ if __name__ == "__main__":
         bucket_list.append(settings._BUCKET_LIST_REGEX)
 
     realstart = time.perf_counter()
-    print("{:60}{:>30}{:>20}{:>20}{:>30}{:>40}".format("Bucket", "Created", "Objects", "Size", "LastModified", "Processing Time"), file=sys.stderr)
+    print("{:60}{:>30}{:>20}{:>20}{:>30}{:>40}".format("Bucket", "Created", "Objects", "Size", "LastModified",
+                                                       "Processing Time"), file=sys.stderr)
 
     for bucket_name in bucket_list:
         try:
@@ -532,23 +526,33 @@ if __name__ == "__main__":
             # Bucket does not exist
             continue
 
-        print("{0:60}".format(bucket_name), file=sys.stderr, end="")
+        if settings._REFRESHCACHE and os.path.isfile(bucket_name + ".cache"):
+            os.remove(bucket_name + ".cache")
+            if settings._VERBOSE > 1:
+                print("Bucket {} cache removed!".format(bucket_name))
+
+        print("{0:60}".format(bucket_name), file=sys.stderr, end="\r")
         bucket_creation = boto3.resource("s3").Bucket(bucket_name).creation_date
         start = time.perf_counter()
         for object in analyse_bucket_contents(bucket_name, settings._KEY_PREFIX):
-            print("{:>30}{:>20}{:>20}{:>30}".format(object[0]['CreationDate'], object[0]['Count'], object[0]['Size'], object[0]['LastModified']), file=sys.stderr, end="")
+            print("{:60}{:>30}{:>20}{:>20}{:>30}".format(bucket_name, object[0]['CreationDate'], object[0]['Count'],
+                                                         object[0]['Size'], object[0]['LastModified']), file=sys.stderr,
+                  end="\r")
             buckets_stats_array.extend(object)
-            json_object = json.loads(json.dumps(object))
-            json_formatted_str = json.dumps(json_object, indent=2)
-            print("{:>40} !".format(str(timedelta(milliseconds=round(1000*(time.perf_counter() - start))))), file=sys.stderr)
+            print(
+                "{:60}{:>30}{:>20}{:>20}{:>30}{:>40}".format(bucket_name, object[0]['CreationDate'], object[0]['Count'],
+                                                             object[0]['Size'], object[0]['LastModified'], str(
+                        timedelta(milliseconds=round(1000 * (time.perf_counter() - start))))), file=sys.stderr)
+            # print("{:>40} !".format(str(timedelta(milliseconds=round(1000 * (time.perf_counter() - start))))), file=sys.stderr)
             if settings._VERBOSE > 1:
-                print(json_formatted_str)
+                print(object)
             start = time.perf_counter()
 
-    all_buckets_stats_json = json.loads(json.dumps({'Buckets': buckets_stats_array}))
-    all_buckets_stats = json.dumps(all_buckets_stats_json, indent=2)
+    all_buckets_stats = {'Buckets': buckets_stats_array}
     if settings._OUTPUT_FILE.__len__() > 0:
-        append_output(all_buckets_stats)
+        append_output(str(all_buckets_stats))
     if settings._VERBOSE > 0:
         print(all_buckets_stats)
-    print("Processed {1:60} buckets in {0:>20}.".format(str(timedelta(milliseconds=round(1000*(time.perf_counter() - realstart)))), len(all_buckets_stats_json['Buckets'])), file=sys.stderr)
+    print("Processed {1:60} buckets in {0:>20}.".format(
+        str(timedelta(milliseconds=round(1000 * (time.perf_counter() - realstart)))),
+        len(all_buckets_stats['Buckets'])), file=sys.stderr)
