@@ -1,4 +1,4 @@
-# S3GetBucketsStatistics
+# S3BucketsStatistics
 
 Cross platform tool to report some statistics on S3 Buckets.
 
@@ -81,7 +81,7 @@ python3 s3bucketstats.py -h
 Just setup your environement to connect to AWS and test it to make sure you have access to your S3 buckets.
 If running on an EC2 instance I would suggest to use IAM Role attached to your EC2 instance.
 ```
-usage: s3getbucketsstats.py [-h] [-v VERBOSE] [-l BUCKET_LIST] [-k KEY_PREFIX]
+usage: s3bucketstats.py [-h] [-v VERBOSE] [-l BUCKET_LIST] [-k KEY_PREFIX]
                             [-r REGION_FILTER] [-o OUTPUT] [-s DISPLAY_SIZE]
                             [-cache | -no-cache] [-refresh | -no-refresh]
                             [-inventory | -no-inventory]
@@ -113,13 +113,13 @@ You can then try the commandline as follow;
 
 Get statistics for all buckets which name start with "a" and reports sizes in GB
 ```
-python3 getstats.py -l 'a.*' -s 3
+python3 s3bucketstats.py -l 'a.*' -s 3
 ```
 
 Get statistics for all buckets which name start with "mybucket" , key prefix /Folder/SubFolder/log* and reports sizes in GB
 (e.g.: s3://mybucket/Folder/SubFolder/log*)
 ```
-python3 getstats.py -l 'mybucket' -k '/Folder/SubFolder/log' -s 3
+python3 s3bucketstats.py -l 'mybucket' -k '/Folder/SubFolder/log' -s 3
 ```
 
 ```
