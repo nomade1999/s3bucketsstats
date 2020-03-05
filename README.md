@@ -29,22 +29,22 @@ If an inventory was already setup and enabled it will try to make use of it to r
 
 ### Prerequisites
 
-There are no installations required, just download the script and run. 
-
 You will need to have python3 installed with the boto3 sdk. Most of the other import should be there by default
-
-Here's the list of import;
-
-```
-import boto3
-import requests
-import pandas
-```
 
 On a clean linux server I had to first install python3 then boto3 and requests.
 ```
 yum install python3
 pip3 install boto3 requests pandas
+```
+
+```
+git clone $REPO_URL && cd s3bucketsstats
+# if using virtualenv
+  virtualenv venv. 
+  source venv/bin/activate 
+pip install -r requirements.txt
+
+python3 s3bucketstats.py -h
 ```
 
 You will also need to get you environment setup to access AWS CLI. 
@@ -64,17 +64,24 @@ You have to make sure that you have a minimum of READ ACCESS to all S3 buckets.
     ]
 }
 ```
+You will also need access to "AWS Price List" to get the most current pricing for the S3 storages.
+You can attache the AWS Managed policy AWSPriceListServiceFullAccess or add the following permission to you current role
+```
+{
+    "Version": "2012-10-17",
+    "Statement": [
+        {
+            "Effect": "Allow",
+            "Action": "pricing:*",
+            "Resource": "*"
+        }
+    ]
+}
+```
 
 ### Installing
 
-```
-git clone $REPO_URL && cd s3bucketsstats
-virtualenv venv
-source venv/bin/activate
-pip install -r requirements.txt
-
-python3 s3bucketstats.py -h
-```
+There are no installations required, just download the script and run. 
 
 ## Running examples
 
