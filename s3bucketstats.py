@@ -32,6 +32,9 @@ groups_dict = {'REDUCED_REDUNDANCY', 'STANDARD', 'STANDARD_IA'}
 size_name = ("B", "KB", "MB", "GB", "TB", "PB")
 csv_columns = ['Bucket', 'Key', 'ETag', 'Size', 'LastModified', 'StorageClass']
 
+global grand_total_objects
+global grand_total_size
+global grand_total_cost
 
 class Settings(object):
     def __init__(self):
@@ -480,9 +483,9 @@ def analyse_bucket_contents(bucket_name, prefix="/", delimiter="/", start_after=
             bucket_cost += cost
 
     if bucket_cost > 0:
-        bucket_cost = "${:,.2f}".format(bucket_cost)
+        bucket_cost_str = "${:,.2f}".format(bucket_cost)
     else:
-        bucket_cost = "n/a"
+        bucket_cost_str = "n/a"
     bucket_stats = [
         {
             'Name': bucket_name,
@@ -502,10 +505,18 @@ def analyse_bucket_contents(bucket_name, prefix="/", delimiter="/", start_after=
             'Encryption': get_encryption(bucket_name),
             'Size': display_size(bucket_size),
             'Count': bucket_objects,
-            'Cost': bucket_cost,
+            'Cost': bucket_cost_str,
             'Content': content
         }
     ]
+
+    global grand_total_cost
+    global grand_total_size
+    global grand_total_objects
+    grand_total_cost += bucket_cost
+    grand_total_objects += bucket_objects
+    grand_total_size += bucket_size
+
     yield bucket_stats
 
 
@@ -639,6 +650,10 @@ if __name__ == "__main__":
     if bucket_list.__len__() == 0:
         bucket_list.append(settings._BUCKET_LIST_REGEX)
 
+    grand_total_size = 0
+    grand_total_objects = 0
+    grand_total_cost = 0
+
     realstart = time.perf_counter()
     print("{:60}{:>30}{:>20}{:>20}{:>30}{:>20}{:>40}".format("Bucket", "Created", "Objects", "Size", "LastModified",
                                                              "Cost (USD)", "Processing Time"), file=sys.stderr)
@@ -674,7 +689,6 @@ if __name__ == "__main__":
                                                                    str(timedelta(milliseconds=round(
                                                                        1000 * (time.perf_counter() - start))))),
                 file=sys.stderr)
-            # print("{:>40} !".format(str(timedelta(milliseconds=round(1000 * (time.perf_counter() - start))))), file=sys.stderr)
             if settings._VERBOSE > 1:
                 print(object)
             start = time.perf_counter()
@@ -684,6 +698,8 @@ if __name__ == "__main__":
         append_output(str(all_buckets_stats))
     if settings._VERBOSE > 0:
         print(all_buckets_stats)
-    print("Processed {1:60} buckets in {0:>20}.".format(
-        str(timedelta(milliseconds=round(1000 * (time.perf_counter() - realstart)))),
-        len(all_buckets_stats['Buckets'])), file=sys.stderr)
+    print("Grand Total:\n  Total Buckets: {:>40}\n  Total Objects: {:>40}\n  Total Size: {:>40}\n  Total Cost: ${:>40,.2f}\n  Processing Time: {:>40}.".format(
+            len(all_buckets_stats['Buckets']),
+            grand_total_objects,grand_total_size,grand_total_cost,
+            str(timedelta(milliseconds=round(1000 * (time.perf_counter() - realstart))))
+        ), file=sys.stderr)
