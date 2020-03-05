@@ -524,17 +524,14 @@ def load_aws_pricing(loc, vol):
         return json.loads(p.get('PriceList')[0])
 
 
-def describe_region(region):
+def describe_region(region_id):
     ec2 = boto3.client("ec2")
     ec2_responses = ec2.describe_regions()
     ssm_client = boto3.client('ssm')
-    for resp in ec2_responses['Regions']:
-        region_id = resp['RegionName']
-        tmp = '/aws/service/global-infrastructure/regions/%s/longName' % region_id
-        ssm_response = ssm_client.get_parameter(Name=tmp)
-        region_name = ssm_response['Parameter']['Value']
-        if region == region_id:
-            return region_name
+    tmp = '/aws/service/global-infrastructure/regions/%s/longName' % region_id
+    ssm_response = ssm_client.get_parameter(Name=tmp)
+    region_name = ssm_response['Parameter']['Value']
+    return region_name
 
 
 def get_priceDimensions_for_region_volume(region, volumeType):
