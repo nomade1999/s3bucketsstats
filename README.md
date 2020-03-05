@@ -79,6 +79,29 @@ You can attache the AWS Managed policy AWSPriceListServiceFullAccess or add the 
 }
 ```
 
+To have access to the Bucket informations you will all need the following permissions
+```
+{
+    "Version": "2012-10-17",
+    "Statement": [
+        {
+            "Effect": "Allow",
+            "Action": [
+                "s3:GetLifecycleConfiguration",
+                "s3:GetObjectRetention",
+                "s3:GetInventoryConfiguration",
+                "s3:GetAccelerateConfiguration",
+                "s3:GetReplicationConfiguration",
+                "s3:GetEncryptionConfiguration",
+                "s3:GetAnalyticsConfiguration",
+                "s3:GetMetricsConfiguration",
+                "s3:GetBucket*"
+            ],
+            "Resource": "*"
+        }
+    ]
+}
+```
 ### Installing
 
 There are no installations required, just download the script and run. 
