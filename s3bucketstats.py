@@ -415,12 +415,12 @@ def analyse_bucket_contents(bucket_name, prefix="/", delimiter="/", start_after=
     elif settings._INVENTORY:
         inventory = get_inventory_configurations(bucket_name)
         if inventory != "Disabled" and inventory.__len__() > 0:
-            print("Processing via Inventory for bucket {}".format(bucket_name), end="")
+            print("Processing via Inventory for bucket {}".format(bucket_name), end="\r")
             aggs = load_inventory_csv(bucket_name, inventory)
 
     if aggs.__len__() == 0:
         # at this point we could not find any data from the cache or inventory and we have to revert to listing all objects from the bucket
-        print("Processing via ListObjects for bucket {}".format(bucket_name), end="")
+        print("Processing via ListObjects for bucket {}".format(bucket_name), end="\r")
         prefix = prefix[1:] if prefix.startswith(delimiter) else prefix
         start_after = (start_after or prefix) if prefix.endswith(delimiter) else start_after
         s3_paginator = s3.get_paginator("list_objects_v2")
