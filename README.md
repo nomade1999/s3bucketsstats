@@ -87,6 +87,7 @@ To have access to the Bucket informations you will all need the following permis
         {
             "Effect": "Allow",
             "Action": [
+                "s3:ListAllMyBuckets",
                 "s3:GetLifecycleConfiguration",
                 "s3:GetObjectRetention",
                 "s3:GetInventoryConfiguration",
