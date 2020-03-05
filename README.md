@@ -22,6 +22,7 @@ This tool will leverage some features of AWS to minimize execution time;
 
 In the event the inventory fails it will automatically revert to list-objects-v2
 
+Inventory need to have at least those columns included: 'Size', 'LastModifiedDate', 'StorageClass', 'EncryptionStatus'
 ## Getting Started
 
 The challenge was to build a tool that could report some metrics and statistics on a list of buckets.
