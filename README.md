@@ -14,7 +14,14 @@ Statistics that will be returned;
    * Total size of files
    * Last modified date of the most recent file
    * Estimate of cost of storage
-      
+
+This tool will leverage some features of AWS to minimize execution time;
+- AWS Inventory if set can be leverage (DEFAULT)
+- AWS S3 Select can be used to read compressed csv inventory results files. (DEFAULT)
+- AWS Price List to retrieve current price structure for S3 buckets in various regions.
+
+In the event the inventory fails it will automatically revert to list-objects-v2
+
 ## Getting Started
 
 The challenge was to build a tool that could report some metrics and statistics on a list of buckets.
