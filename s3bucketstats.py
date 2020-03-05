@@ -269,26 +269,25 @@ def load_inventory_csv(bucket_name, inventory_ids):
                     print("files: {}".format(manifest['files'][0]['key']))
 
                 if settings._S3SELECT:
-                    inv = pd.concat(
-                        s3select_inventory_csv(inventory['Bucket'], files['key'], schema).groupby('StorageClass').agg(
+                    inv_agg = pd.concat(
+                        s3select_inventory_csv(inventory['Bucket'], files['key'], schema).groupby('StorageClass',
+                                                                                                  as_index=False).agg(
                             {'Count': 'sum', 'Size': 'sum', 'LastModifiedDate': 'max'}) for files in
-                        manifest['files']).groupby('StorageClass').agg(
-                        {'Count': 'sum', 'Size': 'max', 'LastModifiedDate': 'max'}).rename(
-                        columns={'LastModifiedDate': 'LastModified'})
+                        manifest['files']).groupby('StorageClass', as_index=False).agg(
+                        {'Count': 'sum', 'Size': 'max', 'LastModifiedDate': 'max'})
                 else:
-                    inv = pd.concat(
-                        read_inventory_file(inventory['Bucket'], files['key'], schema).groupby('StorageClass').agg(
+                    inv_agg = pd.concat(
+                        read_inventory_file(inventory['Bucket'], files['key'], schema).groupby('StorageClass',
+                                                                                               as_index=False).agg(
                             {'Count': 'sum', 'Size': 'sum', 'LastModifiedDate': 'max'}) for files in
-                        manifest['files']).groupby(
-                        'StorageClass').agg({'Count': 'sum', 'Size': 'max', 'LastModifiedDate': 'max'}).rename(
-                        columns={'LastModifiedDate': 'LastModified'})
-
+                        manifest['files']).groupby('StorageClass', as_index=False).agg(
+                        {'Count': 'sum', 'Size': 'max', 'LastModifiedDate': 'max'})
+                break
             except Exception as e:
                 print("load_inventory exception:", e)
                 continue
-            if inv.__len__() > 0:
-                break
-    return inv
+    #    inv_agg.rename(columns={'LastModifiedDate': 'LastModified'})
+    return inv_agg
 
 
 def display_size(size_bytes, sizeformat=-1):
@@ -458,14 +457,18 @@ def analyse_bucket_contents(bucket_name, prefix="/", delimiter="/", start_after=
 
     bucket_objects = aggs['Count'].sum()
     bucket_size = aggs['Size'].sum()
-    bucket_last = aggs['LastModified'].max()
+    if 'LastModified' in aggs:
+        bucket_last = aggs['LastModified'].max()
+    else:
+        bucket_last = aggs['LastModifiedDate'].max()
+
     bucket_cost = 0.0
 
     bucket = boto3.resource("s3").Bucket(bucket_name)
 
     bucket_region = get_region(bucket_name)
-    #content = aggs.to_dict('series')
-    #content = aggs.to_dict('list')
+    # content = aggs.to_dict('series')
+    # content = aggs.to_dict('list')
     content_index = aggs.to_dict('index')
     content = aggs.to_dict('rows')
     for storageClass in content:
@@ -525,12 +528,35 @@ def load_aws_pricing(loc, vol):
 
 
 def describe_region(region_id):
-    ec2 = boto3.client("ec2")
-    ec2_responses = ec2.describe_regions()
-    ssm_client = boto3.client('ssm')
-    tmp = '/aws/service/global-infrastructure/regions/%s/longName' % region_id
-    ssm_response = ssm_client.get_parameter(Name=tmp)
-    region_name = ssm_response['Parameter']['Value']
+    # First try via API, this would allow to pickup on new regions as they arise but does requires more permissions.
+    try:
+        # ec2 = boto3.client("ec2")
+        # ec2_responses = ec2.describe_regions()
+        ssm_client = boto3.client('ssm')
+        tmp = '/aws/service/global-infrastructure/regions/%s/longName' % region_id
+        ssm_response = ssm_client.get_parameter(Name=tmp)
+        region_name = ssm_response['Parameter']['Value']
+    except Exception:
+        regions = [
+            {'id': 'eu-north-1', 'name': 'Europe (Stockholm)'},
+            {'id': 'ap-south-1', 'name': 'Asia Pacific (Mumbai)'},
+            {'id': 'eu-west-3', 'name': 'Europe (Paris)'},
+            {'id': 'eu-west-2', 'name': 'Europe (London)'},
+            {'id': 'eu-west-1', 'name': 'Europe (Ireland)'},
+            {'id': 'ap-northeast-2', 'name': 'Asia Pacific (Seoul)'},
+            {'id': 'ap-northeast-1', 'name': 'Asia Pacific (Tokyo)'},
+            {'id': 'sa-east-1', 'name': 'South America (Sao Paulo)'},
+            {'id': 'ca-central-1', 'name': 'Canada (Central)'},
+            {'id': 'ap-southeast-1', 'name': 'Asia Pacific (Singapore)'},
+            {'id': 'ap-southeast-2', 'name': 'Asia Pacific (Sydney)'},
+            {'id': 'eu-central-1', 'name': 'Europe (Frankfurt)'},
+            {'id': 'us-east-1', 'name': 'US East (N. Virginia)'},
+            {'id': 'us-east-2', 'name': 'US East (Ohio)'},
+            {'id': 'us-west-1', 'name': 'US West (N. California)'},
+            {'id': 'us-west-2', 'name': 'US West (Oregon)'}]
+        df = pd.DataFrame(regions)
+
+        region_name = df[(df['id'] == region_id)]['name']
     return region_name
 
 
