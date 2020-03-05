@@ -29,7 +29,7 @@ except Exception as e:
     print("Exception on s3 instantiation ", e)
 
 groups_dict = {'REDUCED_REDUNDANCY', 'STANDARD', 'STANDARD_IA'}
-size_name = ("B", "KB", "MB", "GB", "TB", "PB", "EB", "ZB", "YB")
+size_name = ("B", "KB", "MB", "GB", "TB", "PB")
 csv_columns = ['Bucket', 'Key', 'ETag', 'Size', 'LastModified', 'StorageClass']
 
 
@@ -389,6 +389,25 @@ def add_bool_arg(parser, name, default=False, description=""):
     parser.set_defaults(**{name: default})
 
 
+def get_bucket_cost_for_storageclass(bucket_region, storageClass, storageSize):
+    objects_size = storageSize / math.pow(1024, 3)
+    pricing = get_priceDimensions_for_region_volume(bucket_region, storageClass)
+    cost = 0
+    while objects_size > 0:
+        for x in pricing:
+            if x["endRange"] == "Inf":
+                endRange = sys.maxsize
+            else:
+                endRange = int(x["endRange"])
+            if objects_size < endRange:
+                pricePerUnit = x['pricePerUnit']['USD']
+                cost += (float(objects_size) * float(pricePerUnit))
+                return cost
+            else:
+                objects_size -= endRange
+    return -1
+
+
 def analyse_bucket_contents(bucket_name, prefix="/", delimiter="/", start_after=""):
     aggs = []
     if settings._CACHE and os.path.isfile(bucket_name + ".cache"):
@@ -440,8 +459,19 @@ def analyse_bucket_contents(bucket_name, prefix="/", delimiter="/", start_after=
     bucket_objects = aggs['Count'].sum()
     bucket_size = aggs['Size'].sum()
     bucket_last = aggs['LastModified'].max()
+    bucket_cost = 0.0
 
     bucket = boto3.resource("s3").Bucket(bucket_name)
+
+    bucket_region = get_region(bucket_name)
+    #content = aggs.to_dict('series')
+    #content = aggs.to_dict('list')
+    content_index = aggs.to_dict('index')
+    content = aggs.to_dict('rows')
+    for storageClass in content:
+        cost = get_bucket_cost_for_storageclass(bucket_region, storageClass['StorageClass'], storageClass['Size'])
+        storageClass['Cost'] = "${:,.2f}".format(cost)
+        bucket_cost += cost
 
     bucket_stats = [
         {
@@ -456,16 +486,74 @@ def analyse_bucket_contents(bucket_name, prefix="/", delimiter="/", start_after=
             'Policy': get_policy(bucket_name),
             'ObjectLock': get_object_lock_configuration(bucket_name),
             'Inventory': get_inventory_configurations(bucket_name),
-            'Region': get_region(bucket_name),
+            'Region': bucket_region,
             'LocationConstraint': get_location(bucket_name),
             'Grantee': get_grantees(bucket_name),
             'Encryption': get_encryption(bucket_name),
             'Size': display_size(bucket_size),
             'Count': bucket_objects,
-            'Content': aggs.to_dict('rows')
+            'Cost': "${:,.2f}".format(bucket_cost),
+            'Content': content
         }
     ]
     yield bucket_stats
+
+
+def load_aws_pricing(loc, vol):
+    pricing = boto3.client('pricing')
+    prefix = "/"
+    delimiter = "/"
+    start_after = ""
+    prefix = prefix[1:] if prefix.startswith(delimiter) else prefix
+    start_after = (start_after or prefix) if prefix.endswith(delimiter) else start_after
+
+    pricing_page = pricing.get_paginator("get_products")
+    for p in pricing_page.paginate(ServiceCode='AmazonS3',
+                                   Filters=[
+                                       {'Type': 'TERM_MATCH', 'Field': 'location', 'Value': loc},
+                                       # {'Type': 'TERM_MATCH', 'Field': 'servicename', 'Value': 'Amazon Simple Storage Service'},
+                                       # {'Type': 'TERM_MATCH', 'Field': 'usagetype', 'Value': 'TimedStorage-ByteHrs'}
+                                       # {'Type': 'TERM_MATCH', 'Field': 'volumeType', 'Value': 'Standard - Infrequent Access'}
+                                       # {'Type': 'TERM_MATCH', 'Field': 'volumeType', 'Value': 'Standard'}
+                                       {'Type': 'TERM_MATCH', 'Field': 'volumeType', 'Value': vol}
+                                   ],
+                                   PaginationConfig={'PageSize': 100}):
+        x = p.get('PriceList')
+        y = p.get('PriceList')[0]
+
+        return json.loads(p.get('PriceList')[0])
+
+
+def describe_region(region):
+    ec2 = boto3.client("ec2")
+    ec2_responses = ec2.describe_regions()
+    ssm_client = boto3.client('ssm')
+    for resp in ec2_responses['Regions']:
+        region_id = resp['RegionName']
+        tmp = '/aws/service/global-infrastructure/regions/%s/longName' % region_id
+        ssm_response = ssm_client.get_parameter(Name=tmp)
+        region_name = ssm_response['Parameter']['Value']
+        if region == region_id:
+            return region_name
+
+
+def get_priceDimensions_for_region_volume(region, volumeType):
+    VolumeTypes = {
+        "STANDARD": "Standard",
+        "STANDARD_IA": "Standard - Infrequent Access",
+        "ONEZONE_IA": "One Zone - Infrequent Access",
+        "REDUCED_REDUNDANCY": "Reduced Redundancy",
+        "GLACIER": "Amazon Glacier"
+    }
+    volumeType = VolumeTypes.get(volumeType)
+
+    price_list = load_aws_pricing(describe_region(region), volumeType).get('terms')['OnDemand']
+    priceDimensions = []
+    for k, v in price_list.items():
+        for a, b in v['priceDimensions'].items():
+            priceDimensions.append(b)
+
+    return sorted(priceDimensions, key=lambda i: int(i['beginRange']))
 
 
 if __name__ == "__main__":
@@ -515,8 +603,8 @@ if __name__ == "__main__":
         bucket_list.append(settings._BUCKET_LIST_REGEX)
 
     realstart = time.perf_counter()
-    print("{:60}{:>30}{:>20}{:>20}{:>30}{:>40}".format("Bucket", "Created", "Objects", "Size", "LastModified",
-                                                       "Processing Time"), file=sys.stderr)
+    print("{:60}{:>30}{:>20}{:>20}{:>30}{:>20}{:>40}".format("Bucket", "Created", "Objects", "Size", "LastModified",
+                                                             "Cost (USD)", "Processing Time"), file=sys.stderr)
 
     for bucket_name in bucket_list:
         try:
@@ -535,14 +623,20 @@ if __name__ == "__main__":
         bucket_creation = boto3.resource("s3").Bucket(bucket_name).creation_date
         start = time.perf_counter()
         for object in analyse_bucket_contents(bucket_name, settings._KEY_PREFIX):
-            print("{:60}{:>30}{:>20}{:>20}{:>30}".format(bucket_name, object[0]['CreationDate'], object[0]['Count'],
-                                                         object[0]['Size'], object[0]['LastModified']), file=sys.stderr,
-                  end="\r")
+            print(
+                "{:60}{:>30}{:>20}{:>20}{:>30}{:>20}".format(bucket_name, object[0]['CreationDate'], object[0]['Count'],
+                                                             object[0]['Size'], object[0]['LastModified'],
+                                                             object[0]['Cost']), file=sys.stderr,
+                end="\r")
             buckets_stats_array.extend(object)
             print(
-                "{:60}{:>30}{:>20}{:>20}{:>30}{:>40}".format(bucket_name, object[0]['CreationDate'], object[0]['Count'],
-                                                             object[0]['Size'], object[0]['LastModified'], str(
-                        timedelta(milliseconds=round(1000 * (time.perf_counter() - start))))), file=sys.stderr)
+                "{:60}{:>30}{:>20}{:>20}{:>30}{:>20}{:>40}".format(bucket_name, object[0]['CreationDate'],
+                                                                   object[0]['Count'],
+                                                                   object[0]['Size'], object[0]['LastModified'],
+                                                                   object[0]["Cost"],
+                                                                   str(timedelta(milliseconds=round(
+                                                                       1000 * (time.perf_counter() - start))))),
+                file=sys.stderr)
             # print("{:>40} !".format(str(timedelta(milliseconds=round(1000 * (time.perf_counter() - start))))), file=sys.stderr)
             if settings._VERBOSE > 1:
                 print(object)
