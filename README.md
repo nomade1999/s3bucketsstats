@@ -37,13 +37,42 @@ If an inventory was already setup and enabled it will try to make use of it to r
 
 ### Prerequisites
 
-You will need to have python3 installed with the boto3 sdk. Most of the other import should be there by default
+You will need to have Python 3.x installed with the boto3 sdk. Most of the other import should be there by default
 
-On a clean linux server I had to first install python3 then boto3 and requests.
+On a clean linux server start by installing Python 3.x if you dont already have.
+You can check your intalled version as follow;
 ```
-yum install python3
-pip3 install boto3 requests pandas
+python -V
 ```
+
+Now make sure that you have your environment setup to access AWS correctly.
+If you have the AWS Cli installed you can test with a simple command as follow;
+```
+aws s3 ls
+```
+If you are using profiles you should be able to to set your environment with your default profile to use as follow;
+```
+set AWS_DEFAULT_PROFILE=myprofile
+```
+
+I personally like to use AWS SSO to access accounts as we can set ephemeral credentials
+```
+aws configure sso --profile sso
+SSO start URL [https://d-xxxxxx.awsapps.com/start]:
+SSO Region [us-east-1]:
+There are 7 AWS accounts available to you.
+Using the account ID ############
+There are 4 roles available to you.
+Using the role name "AWSReadOnlyAccess"
+CLI default client Region [ca-central-1]:
+CLI default output format [None]:
+CLI profile name [AWSReadOnlyAccess-############]: sso
+
+To use this profile, specify the profile name using --profile, as shown:
+
+aws s3 ls --profile sso
+set AWS_DEFAULT_PROFILE=sso
+aws s3 ls
 
 ```
 git clone $REPO_URL && cd s3bucketsstats
