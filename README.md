@@ -73,7 +73,14 @@ To use this profile, specify the profile name using --profile, as shown:
 aws s3 ls --profile sso
 set AWS_DEFAULT_PROFILE=sso
 aws s3 ls
+```
 
+If you have issues connecting ou can have a look at this page to help you
+```
+https://boto3.amazonaws.com/v1/documentation/api/latest/guide/configuration.html
+```
+
+Now install the script by cloning the repository
 ```
 git clone $REPO_URL && cd s3bucketsstats
 # if using virtualenv
