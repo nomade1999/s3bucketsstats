@@ -157,11 +157,11 @@ Just setup your environement to connect to AWS and test it to make sure you have
 If running on an EC2 instance I would suggest to use IAM Role attached to your EC2 instance.
 ```
 usage: s3bucketstats.py [-h] [-v VERBOSE] [-l BUCKET_LIST] [-k KEY_PREFIX]
-                            [-r REGION_FILTER] [-o OUTPUT] [-s DISPLAY_SIZE]
-                            [-cache | -no-cache] [-refresh | -no-refresh]
-                            [-inventory | -no-inventory]
-                            [-s3select | -no-s3select]
-                            [-lowmemory | -no-lowmemory]
+                        [-r REGION_FILTER] [-o OUTPUT] [--size SIZE]
+                        [-cache | -no-cache] [-refresh | -no-refresh]
+                        [-inventory | -no-inventory]
+                        [-s3select | -no-s3select]
+                        [-lowmemory | -no-lowmemory]
 
 optional arguments:
   -h, --help        show this help message and exit
@@ -170,8 +170,8 @@ optional arguments:
   -k KEY_PREFIX     Key prefix to filter on, default='/'
   -r REGION_FILTER  Regex Region filter
   -o OUTPUT         Output to File
-  -s DISPLAY_SIZE   Display size in 0:B, 1:KB, 2:MB, 3:GB, 4:TB, 5:PB, 6:EB,
-                    7:ZB, 8:YB
+  --size SIZE       Possible values: [ B | KB | MB | GB | TB | PB | EB | ZB |
+                    YB ]
   -cache            Use Cache file if available
   -no-cache         Do not Use Cache file if available (DEFAULT)
   -refresh          Force Refresh Cache
