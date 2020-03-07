@@ -23,13 +23,8 @@ import pandas as pd
 import requests
 from botocore.config import Config
 
-try:
-    s3 = boto3.client('s3')
-except Exception as e:
-    print("Exception on s3 instantiation ", e)
-
 groups_dict = {'REDUCED_REDUNDANCY', 'STANDARD', 'STANDARD_IA'}
-size_name = ("B", "KB", "MB", "GB", "TB", "PB")
+sizes_name = ["B", "KB", "MB", "GB", "TB", "PB", "EB", "ZB", "YB"]
 csv_columns = ['Bucket', 'Key', 'ETag', 'Size', 'LastModified', 'StorageClass']
 
 global grand_total_objects
@@ -299,7 +294,7 @@ def display_size(size_bytes, sizeformat=-1):
     i = sizeformat
     p = math.pow(1024, i)
     s = round(size_bytes / p, 2)
-    return "{0}{1}".format(s, size_name[i])
+    return "{0}{1}".format(s, tuple(sizes_name)[i])
 
 
 def write_cache_csv(bucket_name, objects):
@@ -513,7 +508,7 @@ def analyse_bucket_contents(bucket_name, prefix="/", delimiter="/", start_after=
     global grand_total_cost
     global grand_total_size
     global grand_total_objects
-    grand_total_cost += bucket_cost
+    grand_total_cost += round(bucket_cost,2)
     grand_total_objects += bucket_objects
     grand_total_size += bucket_size
 
@@ -613,8 +608,10 @@ if __name__ == "__main__":
                         help="Key prefix to filter on, default='/'")
     parser.add_argument("-r", dest="region_filter", required=False, default='.*', help="Regex Region filter")
     parser.add_argument("-o", dest="output", required=False, default=None, help="Output to File")
-    parser.add_argument("-s", dest="display_size", type=int, required=False, default=0,
-                        help="Display size in 0:B, 1:KB, 2:MB, 3:GB, 4:TB, 5:PB, 6:EB, 7:ZB, 8:YB")
+    parser.add_argument("--size", dest="size", type=str, required=False, default="GB",
+                        help="Possible values:  [ B | KB | MB | GB | TB | PB | EB | ZB | YB ]")
+    #parser.add_argument("-ds", dest="display_size", type=int, required=False, default=0,
+    #                    help="Display size in 0:B, 1:KB, 2:MB, 3:GB, 4:TB, 5:PB, 6:EB, 7:ZB, 8:YB")
 
     add_bool_arg(parser, "cache", False, "Use Cache file if available")
     add_bool_arg(parser, "refresh", False, "Force Refresh Cache")
@@ -627,8 +624,8 @@ if __name__ == "__main__":
 
     if arguments.verbose:
         settings.set_verbose(int(arguments.verbose))
-    if arguments.display_size:
-        settings.set_display_size(int(arguments.display_size))
+    #if arguments.display_size:
+    #    settings.set_display_size(int(arguments.display_size))
     if arguments.bucket_list:
         settings.set_bucket_list_regex(arguments.bucket_list)
     if arguments.region_filter:
@@ -637,13 +634,21 @@ if __name__ == "__main__":
         settings.set_key_prefix(arguments.key_prefix)
     if arguments.output is not None:
         settings.set_output_file(arguments.output)
+
     settings.set_refresh_cache(arguments.refresh)
     settings.set_cache(arguments.cache)
     settings.set_inventory(arguments.inventory)
     settings.set_s3select(arguments.s3select)
     settings.set_lowmemory(arguments.lowmemory)
 
-    buckets = s3.list_buckets()
+    settings.set_display_size( sizes_name.index(arguments.size))
+    try:
+        s3 = boto3.client('s3')
+        buckets = s3.list_buckets()
+    except Exception as e:
+       print("Try setting the environment variables AWS_ACCESS_KEY_ID/AWS_SECRET_ACCESS_KEY/AWS_SESSION_TOKEN")
+       exit(1)
+
     buckets_stats_array = []
 
     bucket_list = [i['Name'] for i in buckets['Buckets'] if re.match(settings._BUCKET_LIST_REGEX, i['Name'])]
@@ -698,8 +703,15 @@ if __name__ == "__main__":
         append_output(str(all_buckets_stats))
     if settings._VERBOSE > 0:
         print(all_buckets_stats)
-    print("Grand Total:\n  Total Buckets: {:>40}\n  Total Objects: {:>40}\n  Total Size: {:>40}\n  Total Cost: ${:>40,.2f}\n  Processing Time: {:>40}.".format(
+    print("Grand Total:\n"\
+          "  Total Buckets:   {:>40}\n"\
+          "  Total Objects:   {:>40}\n"\
+          "  Total Size:      {:>40}\n"\
+          "  Total Cost:      {:>40}\n"\
+          "  Processing Time: {:>40}"
+          .format(
             len(all_buckets_stats['Buckets']),
-            grand_total_objects,grand_total_size,grand_total_cost,
+            grand_total_objects, display_size(grand_total_size), "${:,.2f}".format(grand_total_cost),
             str(timedelta(milliseconds=round(1000 * (time.perf_counter() - realstart))))
         ), file=sys.stderr)
+
